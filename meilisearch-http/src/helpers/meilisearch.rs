@@ -33,6 +33,8 @@ impl IndexSearchExt for Index {
             attributes_to_highlight: None,
             filters: None,
             matches: false,
+            facet_filters: None,
+            facets: None,
         }
     }
 }
@@ -47,6 +49,8 @@ pub struct SearchBuilder<'a> {
     attributes_to_highlight: Option<HashSet<String>>,
     filters: Option<String>,
     matches: bool,
+    facet_filters: Option<crate::routes::search::FacetFilter>, /* TODO change to correct module */
+    facets: Option<Vec<String>>,
 }
 
 impl<'a> SearchBuilder<'a> {
@@ -78,6 +82,16 @@ impl<'a> SearchBuilder<'a> {
 
     pub fn attributes_to_highlight(&mut self, value: HashSet<String>) -> &SearchBuilder {
         self.attributes_to_highlight = Some(value);
+        self
+    }
+
+    pub fn add_facet_fitlers(&mut self, filters: crate::routes::search::FacetFilter) -> &SearchBuilder {
+        self.facet_filters = Some(filters);
+        self
+    }
+
+    pub fn add_facets(&mut self, facets: Vec<String>) -> &SearchBuilder {
+        self.facets = Some(facets);
         self
     }
 
@@ -135,6 +149,12 @@ impl<'a> SearchBuilder<'a> {
                     }
                 });
             }
+        }
+
+        if let Some(ref _facet_filters) = self.facet_filters {
+            // compile facets filters
+            // retrieve documents
+            todo!("set query_builder facet attribute")
         }
 
         let start = Instant::now();

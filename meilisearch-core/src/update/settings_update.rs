@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use heed::Result as ZResult;
 use fst::{set::OpBuilder, SetBuilder};
@@ -102,6 +102,12 @@ pub fn apply_settings_update(
         UpdateState::Nothing => (),
     }
 
+    match settings.attributes_for_faceting {
+        UpdateState::Update(attrs) => apply_attributes_for_faceting_update(writer, index, &mut schema, &attrs)?,
+        UpdateState::Clear => apply_attributes_for_faceting_update(writer, index, &mut schema, &[])?,
+        UpdateState::Nothing => (),
+    }
+
     index.main.put_schema(writer, &schema)?;
 
     match settings.stop_words {
@@ -128,6 +134,24 @@ pub fn apply_settings_update(
         reindex_all_documents(writer, index)?;
     }
 
+    Ok(())
+}
+
+fn apply_attributes_for_faceting_update(writer: &mut heed::RwTxn<MainT>,
+    index: &store::Index,
+    schema: &mut Schema,
+    attributes: &[String]) -> MResult<()> {
+
+    // register new facets in the settings
+    // prevents duplicates
+    let mut attribute_ids = HashSet::new();
+    for name in attributes {
+        attribute_ids.insert(schema.insert(name)?);
+    }
+   index.main.put_attributes_for_faceting(writer, attribute_ids.into_iter().collect())?; 
+
+    //TODO handle facet update and do indexing...
+    
     Ok(())
 }
 

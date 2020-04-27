@@ -91,6 +91,13 @@ async fn get_all(
 
     let schema = index.main.schema(&reader)?;
 
+    let attributes_for_faceting = match (&schema, index.main.attributes_for_faceting(&reader)?) {
+        (Some(schema), Some(ref attrs)) => {
+            Some(attrs.iter().map(|field| schema.name(*field).unwrap_or(&"unknown field name").to_string()).collect())
+        }
+        _ => None,
+    } ;
+
     let searchable_attributes = schema.clone().map(|s| {
         s.indexed_name()
             .iter()
@@ -115,6 +122,7 @@ async fn get_all(
         stop_words: Some(Some(stop_words)),
         synonyms: Some(Some(synonyms)),
         accept_new_fields: Some(accept_new_fields),
+        attributes_for_faceting: Some(attributes_for_faceting),
     };
 
     Ok(HttpResponse::Ok().json(settings))
@@ -140,6 +148,7 @@ async fn delete_all(
         stop_words: UpdateState::Clear,
         synonyms: UpdateState::Clear,
         accept_new_fields: UpdateState::Clear,
+        attributes_for_faceting: UpdateState::Clear,
     };
 
     let update_id = index.settings_update(&mut writer, settings)?;

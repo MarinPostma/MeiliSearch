@@ -9,7 +9,7 @@ use crate::database::{MainT, UpdateT};
 use crate::database::{UpdateEvent, UpdateEventsEmitter};
 use crate::raw_indexer::RawIndexer;
 use crate::serde::{extract_document_id, serialize_value_with_id, Deserializer, Serializer};
-use crate::store;
+use crate::store::{self, FacetKey};
 use crate::update::{apply_documents_deletion, compute_short_prefixes, next_update_id, Update};
 use crate::{Error, MResult, RankedMap};
 
@@ -103,10 +103,11 @@ pub fn push_documents_addition<D: serde::Serialize>(
     Ok(last_update_id)
 }
 
-pub fn apply_documents_addition<'a, 'b>(
+pub fn apply_addition<'a, 'b>(
     writer: &'a mut heed::RwTxn<'b, MainT>,
     index: &store::Index,
     addition: Vec<IndexMap<String, serde_json::Value>>,
+    partial: bool
 ) -> MResult<()> {
     let mut documents_additions = HashMap::new();
 
@@ -118,13 +119,50 @@ pub fn apply_documents_addition<'a, 'b>(
     let primary_key = schema.primary_key().ok_or(Error::MissingPrimaryKey)?;
 
     // 1. store documents ids for future deletion
-    for document in addition {
+    for mut document in addition {
         let document_id = match extract_document_id(&primary_key, &document)? {
             Some(id) => id,
             None => return Err(Error::MissingDocumentId),
         };
 
+        if partial {
+            let mut deserializer = Deserializer {
+                document_id,
+                reader: writer,
+                documents_fields: index.documents_fields,
+                schema: &schema,
+                fields: None,
+            };
+
+            // retrieve the old document and
+            // update the new one with missing keys found in the old one
+            let result = Option::<HashMap<String, serde_json::Value>>::deserialize(&mut deserializer)?;
+            if let Some(old_document) = result {
+                for (key, value) in old_document {
+                    document.entry(key).or_insert(value);
+                }
+            }
+        }
+
         documents_additions.insert(document_id, document);
+    }
+
+    // add facets for docs facets
+    if let Some(attributes_for_facetting) = index.main.attributes_for_faceting(writer)? {
+        let mut facet_map = HashMap::new();
+        for (id, document) in &documents_additions {
+            for attr_id in &attributes_for_facetting {
+                if let Some(attr) = schema.name(*attr_id) {
+                    if let Some(value) = document.get(attr) {
+                        let key = FacetKey::new(*attr_id, value.to_string());
+                        facet_map.entry(key).or_insert(Vec::new()).push(*id);
+                    }
+                } else {
+                    todo!("field name not found error");
+                }
+            }
+        }
+        index.facets.update(writer, facet_map)?;
     }
 
     // 2. remove the documents posting lists
@@ -177,85 +215,15 @@ pub fn apply_documents_partial_addition<'a, 'b>(
     index: &store::Index,
     addition: Vec<IndexMap<String, serde_json::Value>>,
 ) -> MResult<()> {
-    let mut documents_additions = HashMap::new();
+    apply_addition(writer, index, addition, true)
+}
 
-    let mut schema = match index.main.schema(writer)? {
-        Some(schema) => schema,
-        None => return Err(Error::SchemaMissing),
-    };
-
-    let primary_key = schema.primary_key().ok_or(Error::MissingPrimaryKey)?;
-
-    // 1. store documents ids for future deletion
-    for mut document in addition {
-        let document_id = match extract_document_id(&primary_key, &document)? {
-            Some(id) => id,
-            None => return Err(Error::MissingDocumentId),
-        };
-
-        let mut deserializer = Deserializer {
-            document_id,
-            reader: writer,
-            documents_fields: index.documents_fields,
-            schema: &schema,
-            fields: None,
-        };
-
-        // retrieve the old document and
-        // update the new one with missing keys found in the old one
-        let result = Option::<HashMap<String, serde_json::Value>>::deserialize(&mut deserializer)?;
-        if let Some(old_document) = result {
-            for (key, value) in old_document {
-                document.entry(key).or_insert(value);
-            }
-        }
-
-        documents_additions.insert(document_id, document);
-    }
-
-    // 2. remove the documents posting lists
-    let number_of_inserted_documents = documents_additions.len();
-    let documents_ids = documents_additions.iter().map(|(id, _)| *id).collect();
-    apply_documents_deletion(writer, index, documents_ids)?;
-
-    let mut ranked_map = match index.main.ranked_map(writer)? {
-        Some(ranked_map) => ranked_map,
-        None => RankedMap::default(),
-    };
-
-    let stop_words = match index.main.stop_words_fst(writer)? {
-        Some(stop_words) => stop_words,
-        None => fst::Set::default(),
-    };
-
-    // 3. index the documents fields in the stores
-    let mut indexer = RawIndexer::new(stop_words);
-
-    for (document_id, document) in documents_additions {
-        let serializer = Serializer {
-            txn: writer,
-            schema: &mut schema,
-            document_store: index.documents_fields,
-            document_fields_counts: index.documents_fields_counts,
-            indexer: &mut indexer,
-            ranked_map: &mut ranked_map,
-            document_id,
-        };
-
-        document.serialize(serializer)?;
-    }
-
-    write_documents_addition_index(
-        writer,
-        index,
-        &ranked_map,
-        number_of_inserted_documents,
-        indexer,
-    )?;
-
-    index.main.put_schema(writer, &schema)?;
-
-    Ok(())
+pub fn apply_documents_addition<'a, 'b>(
+    writer: &'a mut heed::RwTxn<'b, MainT>,
+    index: &store::Index,
+    addition: Vec<IndexMap<String, serde_json::Value>>,
+) -> MResult<()> {
+    apply_addition(writer, index, addition, false)
 }
 
 pub fn reindex_all_documents(writer: &mut heed::RwTxn<MainT>, index: &store::Index) -> MResult<()> {

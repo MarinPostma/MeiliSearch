@@ -23,6 +23,7 @@ actix-web = "2"
 actix-web-macros = "0.1.0"
 chrono = { version = "0.4.11", features = ["serde"] }
 crossbeam-channel = "0.4.2"
+either = { version = "1.5.3", features = ["serde"] }
 env_logger = "0.7.1"
 futures = "0.3.4"
 heed = "0.7.0"

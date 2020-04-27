@@ -4,13 +4,14 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use heed::types::{ByteSlice, OwnedType, SerdeBincode, Str};
 use heed::Result as ZResult;
-use meilisearch_schema::Schema;
+use meilisearch_schema::{FieldId, Schema};
 
 use crate::database::MainT;
 use crate::RankedMap;
 use crate::settings::RankingRule;
 
 const CREATED_AT_KEY: &str = "created-at";
+const ATTRIBUTES_FOR_FACETING: &str = "attributes-for-faceting";
 const RANKING_RULES_KEY: &str = "ranking-rules";
 const DISTINCT_ATTRIBUTE_KEY: &str = "distinct-attribute";
 const STOP_WORDS_KEY: &str = "stop-words";
@@ -186,6 +187,15 @@ impl Main {
             Some(freqs) => Ok(Some(freqs)),
             None => Ok(None),
         }
+    }
+
+    // TODO not sure allocatoin is needed here, as FieldId = u32
+    pub fn attributes_for_faceting(&self, reader: &heed::RoTxn<MainT>) -> ZResult<Option<Vec<FieldId>>> {
+        self.main.get::<_, Str, SerdeBincode<Vec<FieldId>>>(reader, ATTRIBUTES_FOR_FACETING)
+    }
+
+    pub fn put_attributes_for_faceting(self, writer: &mut heed::RwTxn<MainT>, attributes: Vec<FieldId>) -> ZResult<()> {
+        self.main.put::<_, Str, SerdeBincode<Vec<FieldId>>>(writer, ATTRIBUTES_FOR_FACETING, &attributes)
     }
 
     pub fn ranking_rules(&self, reader: &heed::RoTxn<MainT>) -> ZResult<Option<Vec<RankingRule>>> {

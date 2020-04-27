@@ -4,7 +4,11 @@ use log::warn;
 use actix_web::web;
 use actix_web::HttpResponse;
 use actix_web_macros::get;
+use either::Either;
 use serde::Deserialize;
+use serde_json::Value;
+
+use meilisearch_schema::{FieldId, Schema};
 
 use crate::error::ResponseError;
 use crate::helpers::meilisearch::IndexSearchExt;
@@ -12,6 +16,51 @@ use crate::helpers::Authentication;
 use crate::routes::IndexParam;
 use crate::Data;
 
+// TODO move that somewhere relevant
+
+pub type FacetFilter = Vec<Either<Vec<(FieldId, String)>, (FieldId, String)>>;
+
+fn parse_facet_filters(expr: &str, schema: &Schema) -> Result<FacetFilter, ResponseError> {
+    use ResponseError::FacetExpressionParse;
+
+    fn parse_string(string: &str, schema: &Schema) -> Result<(FieldId, String), ResponseError> {
+        let  mut s = string.split(":");
+        let id_str = s.next().unwrap();
+        let id = schema
+            .id(id_str)
+            .ok_or(FacetExpressionParse(format!("could not find attribute \"{}\" in index", id_str)))?;
+        let value = s
+            .last()
+            .ok_or(FacetExpressionParse(format!("invalid facet: {}, facets should be \"facetName:facetvalue\"", string)))?;
+        Ok((id, value.to_string()))
+    };
+
+    let value = serde_json::from_str::<Value>(expr)
+        .map_err(|e| FacetExpressionParse(e.to_string()))?;
+    let mut result = Vec::new();
+    match value {
+        Value::Array(values) => {
+            for val in values {
+                match val {
+                    Value::String(s) => result.push(Either::Right(parse_string(&s, schema)?)),
+                    Value::Array(vals) => {
+                        let mut inner = Vec::new();
+                        for val in vals {
+                            match val {
+                                Value::String(s) => inner.push(parse_string(&s, schema)?),
+                                bad_value => return Err(FacetExpressionParse(format!("expected String, found: {:?}", bad_value))),
+                            }
+                        }
+                        result.push(Either::Left(inner));
+                    }
+                    bad_value => return Err(FacetExpressionParse(format!("expected String or Array, found: {:?}", bad_value))),
+                }
+            }
+            return Ok(result)
+        }
+        bad_value => Err(FacetExpressionParse(format!("expected Array, found: {:?}", bad_value)))
+    }
+}
 pub fn services(cfg: &mut web::ServiceConfig) {
     cfg.service(search_with_url_query);
 }
@@ -28,6 +77,8 @@ struct SearchQuery {
     attributes_to_highlight: Option<String>,
     filters: Option<String>,
     matches: Option<bool>,
+    facet_filters: Option<String>,
+    facets: Option<String>,
 }
 
 #[get("/indexes/{index_uid}/search", wrap = "Authentication::Public")]
@@ -79,6 +130,30 @@ async fn search_with_url_query(
         None => {
             restricted_attributes = available_attributes.clone();
         }
+    }
+
+    if let Some(ref facet_filters) = params.facet_filters {
+        let facet_filters = parse_facet_filters(facet_filters, &schema)?;
+        search_builder.add_facet_fitlers(facet_filters);
+    }
+
+    if let Some(ref facets) = params.facets {
+        let value = serde_json::from_str::<Value>(facets);
+        let mut facets = Vec::new();
+        match value {
+            Ok(Value::Array(values)) => {
+                for value in values {
+                    match value {
+                        Value::String(s) => {
+                            facets.push(s)
+                        }
+                        _ => todo!("error handling")
+                    }
+                }
+            }
+            _ => todo!("error handling")
+        }
+        search_builder.add_facets(facets);
     }
 
     if let Some(attributes_to_crop) = &params.attributes_to_crop {

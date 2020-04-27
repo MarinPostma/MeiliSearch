@@ -23,6 +23,7 @@ pub enum ResponseError {
     FilterParsing(String),
     RetrieveDocument(u64, String),
     SearchDocuments(String),
+    FacetExpressionParse(String),
 }
 
 impl ResponseError {
@@ -106,6 +107,7 @@ impl fmt::Display for ResponseError {
             Self::OpenIndex(err) => write!(f, "Impossible to open index; {}", err),
             Self::RetrieveDocument(id, err) => write!(f, "impossible to retrieve the document with id: {}; {}", id, err),
             Self::SearchDocuments(err) => write!(f, "impossible to search documents; {}", err),
+            Self::FacetExpressionParse(e) => write!(f, "error parsing facet filter expression: {}", e),
         }
     }
 }
@@ -125,6 +127,7 @@ impl aweb::error::ResponseError for ResponseError {
             | Self::InvalidIndexUid
             | Self::OpenIndex(_)
             | Self::RetrieveDocument(_, _)
+            | Self::FacetExpressionParse(_)
             | Self::SearchDocuments(_)
             | Self::FilterParsing(_) => StatusCode::BAD_REQUEST,
             Self::DocumentNotFound(_)

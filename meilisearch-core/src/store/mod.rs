@@ -8,6 +8,7 @@ mod postings_lists;
 mod synonyms;
 mod updates;
 mod updates_results;
+mod facets;
 
 pub use self::docs_words::DocsWords;
 pub use self::prefix_documents_cache::PrefixDocumentsCache;
@@ -21,6 +22,7 @@ pub use self::postings_lists::PostingsLists;
 pub use self::synonyms::Synonyms;
 pub use self::updates::Updates;
 pub use self::updates_results::UpdatesResults;
+pub use self::facets::{Facets, FacetKey};
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -197,6 +199,10 @@ fn updates_results_name(name: &str) -> String {
     format!("store-{}-updates-results", name)
 }
 
+fn facets_name(name: &str) -> String {
+    format!("store-{}-facets", name)
+}
+
 #[derive(Clone)]
 pub struct Index {
     pub main: Main,
@@ -207,6 +213,7 @@ pub struct Index {
     pub docs_words: DocsWords,
     pub prefix_documents_cache: PrefixDocumentsCache,
     pub prefix_postings_lists_cache: PrefixPostingsListsCache,
+    pub facets: Facets,
 
     pub updates: Updates,
     pub updates_results: UpdatesResults,
@@ -395,6 +402,7 @@ pub fn create(
     let prefix_postings_lists_cache_name = prefix_postings_lists_cache_name(name);
     let updates_name = updates_name(name);
     let updates_results_name = updates_results_name(name);
+    let facets_name = facets_name(name);
 
     // open all the stores
     let main = env.create_poly_database(Some(&main_name))?;
@@ -407,6 +415,7 @@ pub fn create(
     let prefix_postings_lists_cache = env.create_database(Some(&prefix_postings_lists_cache_name))?;
     let updates = update_env.create_database(Some(&updates_name))?;
     let updates_results = update_env.create_database(Some(&updates_results_name))?;
+    let facets = update_env.create_database(Some(&facets_name))?;
 
     Ok(Index {
         main: Main { main },
@@ -420,6 +429,7 @@ pub fn create(
         updates: Updates { updates },
         updates_results: UpdatesResults { updates_results },
         updates_notifier,
+        facets: Facets { facets },
     })
 }
 
@@ -440,6 +450,7 @@ pub fn open(
     let prefix_postings_lists_cache_name = prefix_postings_lists_cache_name(name);
     let updates_name = updates_name(name);
     let updates_results_name = updates_results_name(name);
+    let facets_name = facets_name(name);
 
     // open all the stores
     let main = match env.open_poly_database(Some(&main_name))? {
@@ -482,6 +493,10 @@ pub fn open(
         Some(updates_results) => updates_results,
         None => return Ok(None),
     };
+    let facets = match update_env.open_database(Some(&facets_name))? {
+        Some(facets) => facets,
+        None => return Ok(None),
+    };
 
     Ok(Some(Index {
         main: Main { main },
@@ -495,6 +510,7 @@ pub fn open(
         updates: Updates { updates },
         updates_results: UpdatesResults { updates_results },
         updates_notifier,
+        facets: Facets { facets },
     }))
 }
 
