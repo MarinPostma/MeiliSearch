@@ -4,13 +4,67 @@ use std::sync::Arc;
 
 use meilisearch_core::{Database, DatabaseOptions};
 use sha2::Digest;
+use raft::Store;
+use serde::{Serialize, Deserialize};
+use bincode::deserialize;
+use async_trait::async_trait;
 
 use crate::index_update_callback;
 use crate::option::Opt;
+use crate::routes::document::{update_multiple_documents, UpdateDocumentsQuery};
+use crate::routes::index::{ IndexCreateRequest, create_index };
 
 #[derive(Clone)]
 pub struct Data {
     inner: Arc<DataInner>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum Message {
+    DocumentAddition { index: String, addition: String, partial: bool },
+    IndexCreation { data: IndexCreateRequest },
+}
+
+#[async_trait]
+impl Store for Data {
+    async fn apply(&mut self, message: &[u8]) -> raft::Result<Vec<u8>> {
+        let message: Message = deserialize(message).unwrap();
+        println!("here");
+        match message {
+            Message::DocumentAddition { index, addition, partial } => {
+                let update = UpdateDocumentsQuery { primary_key: None };
+                let addition: serde_json::Value = serde_json::from_str(&addition).unwrap();
+                let addition = addition
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect())
+                    .collect();
+                let response = update_multiple_documents(self, &index, update, addition, partial).await;
+                println!("response: {:?}", response);
+
+                Ok(vec![])
+            }
+            Message::IndexCreation { data } => {
+                let response = create_index(self, data).await;
+                println!("response: {:?}", response);
+                Ok(vec![])
+            }
+        }
+    }
+
+    async fn snapshot(&self) -> raft::Result<Vec<u8>> {
+        Ok(vec![])
+    }
+
+    async fn restore(&mut self, _snapshot: &[u8]) -> raft::Result<()> {
+        Ok(())
+    }
 }
 
 impl Deref for Data {

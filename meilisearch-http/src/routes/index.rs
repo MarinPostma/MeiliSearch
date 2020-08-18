@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use actix_web::{web, HttpResponse};
 use actix_web_macros::{delete, get, post, put};
 use chrono::{DateTime, Utc};
@@ -9,11 +11,23 @@ use crate::error::{Error, ResponseError};
 use crate::helpers::Authentication;
 use crate::routes::IndexParam;
 use crate::Data;
+use crate::data::Message;
+use bincode::serialize;
 
 pub fn services(cfg: &mut web::ServiceConfig) {
     cfg.service(list_indexes)
         .service(get_index)
-        .service(create_index)
+        .service(create_index_route)
+        .service(update_index)
+        .service(delete_index)
+        .service(get_update_status)
+        .service(get_all_updates_status);
+}
+
+pub fn services_raft(cfg: &mut web::ServiceConfig) {
+    cfg.service(list_indexes)
+        .service(get_index)
+        .service(create_index_route_raft)
         .service(update_index)
         .service(delete_index)
         .service(get_update_status)
@@ -137,19 +151,15 @@ async fn get_index(
     Ok(HttpResponse::Ok().json(index_response))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct IndexCreateRequest {
+pub struct IndexCreateRequest {
     name: Option<String>,
     uid: Option<String>,
     primary_key: Option<String>,
 }
 
-#[post("/indexes", wrap = "Authentication::Private")]
-async fn create_index(
-    data: web::Data<Data>,
-    body: web::Json<IndexCreateRequest>,
-) -> Result<HttpResponse, ResponseError> {
+pub async fn create_index(data: &Data, body: IndexCreateRequest) -> Result<HttpResponse, ResponseError> {
     if let (None, None) = (body.name.clone(), body.uid.clone()) {
         return Err(Error::bad_request(
             "Index creation must have an uid",
@@ -216,6 +226,27 @@ async fn create_index(
     })?;
 
     Ok(HttpResponse::Created().json(index_response))
+}
+
+#[post("/indexes", wrap = "Authentication::Private")]
+async fn create_index_route(
+    data: web::Data<Data>,
+    body: web::Json<IndexCreateRequest>,
+) -> Result<HttpResponse, ResponseError> {
+    create_index(&data.into_inner(), body.into_inner()).await
+}
+
+#[post("/indexes", wrap = "Authentication::Private")]
+async fn create_index_route_raft(
+    mailbox: web::Data<Arc<raft::Mailbox>>,
+    body: web::Json<IndexCreateRequest>,
+) -> Result<HttpResponse, ResponseError> {
+    let message = Message::IndexCreation { data: body.into_inner() };
+    println!("here");
+    let message = serialize(&message).unwrap();
+    println!("here2");
+    let _ = mailbox.send(message).await.unwrap();
+    Ok("done".into())
 }
 
 #[derive(Debug, Deserialize)]

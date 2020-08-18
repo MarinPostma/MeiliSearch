@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 
 use actix_web::{web, HttpResponse};
 use actix_web_macros::{delete, get, post, put};
@@ -6,13 +7,15 @@ use indexmap::IndexMap;
 use meilisearch_core::update;
 use serde::Deserialize;
 use serde_json::Value;
+use bincode::serialize;
 
 use crate::Data;
 use crate::error::{Error, ResponseError};
 use crate::helpers::Authentication;
 use crate::routes::{IndexParam, IndexUpdateResponse};
+use crate::data::Message;
 
-type Document = IndexMap<String, Value>;
+pub type Document = IndexMap<String, Value>;
 
 #[derive(Deserialize)]
 struct DocumentParam {
@@ -25,6 +28,16 @@ pub fn services(cfg: &mut web::ServiceConfig) {
         .service(delete_document)
         .service(get_all_documents)
         .service(add_documents)
+        .service(update_documents)
+        .service(delete_documents)
+        .service(clear_all_documents);
+}
+
+pub fn services_raft(cfg: &mut web::ServiceConfig) {
+    cfg.service(get_document)
+        .service(delete_document)
+        .service(get_all_documents)
+        .service(add_documents_raft)
         .service(update_documents)
         .service(delete_documents)
         .service(clear_all_documents);
@@ -135,21 +148,21 @@ fn find_primary_key(document: &IndexMap<String, Value>) -> Option<String> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct UpdateDocumentsQuery {
-    primary_key: Option<String>,
+pub struct UpdateDocumentsQuery {
+    pub primary_key: Option<String>,
 }
 
-async fn update_multiple_documents(
-    data: web::Data<Data>,
-    path: web::Path<IndexParam>,
-    params: web::Query<UpdateDocumentsQuery>,
-    body: web::Json<Vec<Document>>,
+pub async fn update_multiple_documents(
+    data: &Data,
+    index_uid: &str,
+    params: UpdateDocumentsQuery,
+    documents: Vec<Document>,
     is_partial: bool,
 ) -> Result<HttpResponse, ResponseError> {
     let index = data
         .db
-        .open_index(&path.index_uid)
-        .ok_or(Error::index_not_found(&path.index_uid))?;
+        .open_index(index_uid)
+        .ok_or(Error::index_not_found(index_uid))?;
 
     let reader = data.db.main_read_txn()?;
 
@@ -161,7 +174,7 @@ async fn update_multiple_documents(
     if schema.primary_key().is_none() {
         let id = match &params.primary_key {
             Some(id) => id.to_string(),
-            None => body
+            None => documents
                 .first()
                 .and_then(find_primary_key)
                 .ok_or(meilisearch_core::Error::MissingPrimaryKey)?
@@ -180,7 +193,7 @@ async fn update_multiple_documents(
         index.documents_addition()
     };
 
-    for document in body.into_inner() {
+    for document in documents {
         document_addition.update_document(document);
     }
 
@@ -196,7 +209,27 @@ async fn add_documents(
     params: web::Query<UpdateDocumentsQuery>,
     body: web::Json<Vec<Document>>,
 ) -> Result<HttpResponse, ResponseError> {
-    update_multiple_documents(data, path, params, body, false).await
+    update_multiple_documents(&data.into_inner(), &path.index_uid, params.into_inner(), body.into_inner(), false).await
+}
+
+#[post("/indexes/{index_uid}/documents", wrap = "Authentication::Private")]
+async fn add_documents_raft(
+    path: web::Path<IndexParam>,
+    mailbox: web::Data<Arc<raft::Mailbox>>,
+    body: web::Json<Vec<Document>>,
+) -> Result<HttpResponse, ResponseError> {
+    let body = serde_json::to_string(&body.into_inner()).unwrap();
+    let message = Message::DocumentAddition {
+        index: path.index_uid.clone(),
+        addition: body,
+        partial: false,
+    };
+    println!("here");
+    let message = serialize(&message).unwrap();
+    println!("here2");
+    let _ = mailbox.send(message).await.unwrap();
+    println!("added documents");
+    Ok(format!("ok").into())
 }
 
 #[put("/indexes/{index_uid}/documents", wrap = "Authentication::Private")]
@@ -206,7 +239,7 @@ async fn update_documents(
     params: web::Query<UpdateDocumentsQuery>,
     body: web::Json<Vec<Document>>,
 ) -> Result<HttpResponse, ResponseError> {
-    update_multiple_documents(data, path, params, body, true).await
+    update_multiple_documents(&data.into_inner(), &path.index_uid, params.into_inner(), body.into_inner(), true).await
 }
 
 #[post(

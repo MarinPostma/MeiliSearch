@@ -115,6 +115,13 @@ pub struct Opt {
     /// Defines time interval, in seconds, between each snapshot creation.
     #[structopt(long, requires = "snapshot-path", default_value = "86400", env = "MEILI_SNAPSHOT_INTERVAL_SEC")]
     pub snapshot_interval_sec: u64,
+    /// raft-addr
+    #[structopt(long)]
+    pub raft_addr: String,
+    
+    /// raft-addr
+    #[structopt(long)]
+    pub peer_addr: Option<String>,
 }
 
 impl Opt {
